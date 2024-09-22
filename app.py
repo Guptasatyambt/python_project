@@ -11,6 +11,7 @@ from spacy.matcher import Matcher
 from nltk.corpus import stopwords
 import pandas as pd
 import docx2txt
+from PyPDF2 import PdfFileReader
 
 nltk.download('stopwords')
 nltk.download('punkt')
@@ -29,39 +30,43 @@ stop_words = set(stopwords.words('english'))
 
 app = Flask(__name__)
 
+
 @app.route('/extract_skills', methods=['POST'])
 def extract_skills():
     resume_url = request.json.get('resume_url')  # Dynamic URL input
-    try:
-        response = requests.get(resume_url)
-        response.raise_for_status()  # Raise HTTPError for bad responses
-    except requests.RequestException as e:
-        return jsonify({'error': f'Failed to download the file: {str(e)}'}), 400
+    response = requests.get(resume_url)
+    if response.status_code == 200:
+        # Read the content of the file
+        file_content = BytesIO(response.content)
 
-    # Read the content of the file
-    file_content = BytesIO(response.content)
-
-    # Check the file type and process accordingly
-    if resume_url.lower().endswith('.docx'):
-        textinput = doc_to_text(file_content)
-    elif resume_url.lower().endswith('.pdf'):
-        textinput = pdf_to_text(file_content)
+        # Check the file type and process accordingly
+        if resume_url.lower().endswith(('.pdf', '.docx')):
+            if resume_url.endswith('.docx'):
+                # Process .docx file
+                textinput = doctotext(file_content)
+            elif resume_url.endswith('.pdf'):
+                # Process .pdf file
+                textinput = pdftotext(file_content)
+            else:
+                print("File format not supported")
+        else:
+            print("File format not supported")
     else:
-        return jsonify({'error': 'File format not supported'}), 400
-
+        print("Failed to download the file from the provided URL")
     skills_csv_path = 'skill.csv'
     questions_file_path = 'quest.txt'
 
     matched_skills = extract_skills_from_resume(textinput, skills_csv_path)
 
     questions = load_questions(questions_file_path)
-    response_questions = {}
+    response_questions = []
     for skill in matched_skills:
         filtered_questions = filter_questions(questions, skill)
         random_question = choose_random_question(filtered_questions)
-        response_questions[skill] = random_question
+        response_questions.append(random_question)
 
-    return jsonify({'skills': matched_skills, 'questions': response_questions})
+    return jsonify(response_questions)
+
 
 def extract_skills_from_resume(resume_text, skills_csv_path):
     doc = nlp(resume_text)
@@ -86,25 +91,30 @@ def extract_skills_from_resume(resume_text, skills_csv_path):
     matched_skills = potential_skills.intersection(skills_list)
     return list(matched_skills)
 
+
 def load_questions(file_path):
     with open(file_path, 'r') as file:
         questions = [line.strip() for line in file]
     return questions
 
+
 def filter_questions(questions, keyword):
     return [q for q in questions if keyword.lower() in q.lower()]
+
 
 def choose_random_question(questions):
     if not questions:
         return "No questions found with the specified keyword."
     return random.choice(questions)
 
-def doc_to_text(doc_file):
-    temp = docx2txt.process(doc_file)
-    resume_text = [line.replace('\t', ' ') for line in temp.split('\n') if line]
-    return ' '.join(resume_text)
 
-def pdf_to_text(pdf_file):
+def doctotext(m):
+    temp = docx2txt.process(m)
+    resume_text = [line.replace('\t', ' ') for line in temp.split('\n') if line]
+    text = ' '.join(resume_text)
+    return (text)
+
+def pdftotext(pdf_file):
     # Create a PDF file reader object
     pdf_reader = PyPDF2.PdfFileReader(pdf_file)
 
@@ -114,9 +124,8 @@ def pdf_to_text(pdf_file):
     # Iterate through each page of the PDF and extract text
     for page_num in range(pdf_reader.numPages):
         page = pdf_reader.getPage(page_num)
-        text += page.extract_text()
+        text += page.extractText()
 
     return text.strip()
-
 if __name__ == '__main__':
     app.run(debug=True)
